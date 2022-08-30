@@ -20,7 +20,7 @@ import springfox.documentation.swagger2.annotations.EnableSwagger2;
  */
 
 @SpringBootApplication()
-@EnableSwagger2
+//@EnableSwagger2
 // scanBasePackages = {"com.example.Excercise1.services"}
 public class Excercise1Application {
 
