@@ -5,6 +5,7 @@ import com.example.Excercise1.exceptions.XifinDataNotFoundException;
 import com.example.Excercise1.mars.ValueObject;
 import com.example.Excercise1.models.MultipleMappedRowsIterator;
 import com.example.Excercise1.models.ValueObjectIterator;
+import com.example.Excercise1.persistence.ErrorCodeMap;
 import com.example.Excercise1.utility.Money;
 import org.apache.log4j.Logger;
 import org.springframework.jdbc.datasource.DataSourceUtils;
@@ -56,64 +57,406 @@ public class XifinJdbcDaoManager implements MarsDaoManager{
         return valueObjects;
     }
 
-    @Override
+    /**
+     * method overrid provides easier calls with variable parameter list. The client code will no longer have to create a list,
+     * add to it, and pass it in.
+     *
+     * @param valueObjectClass The the value object.
+     * @param sql              The sql to retrieve the records
+     * @param params           The parameters for the sql
+     * @return a list of ValueObjects
+     */
     public <T extends ValueObject> List<T> getValueObjects(Class<T> valueObjectClass, String sql, Object... params) {
-        return null;
+        return getValueObjects(sql, Arrays.asList(params), valueObjectClass);
     }
 
+    /**
+     * Load a ValueObject using its representative record in the database.
+     *
+     * @param valueObject The the value object.
+     * @throws
+     *          if the record was not found
+     */
     @Override
     public void loadValueObject(ValueObject valueObject) throws XifinDataNotFoundException {
-
+        loadValueObject(valueObject.getSelectSql(), valueObject.getPkParams(), valueObject);
     }
 
+    /**
+     * Gets a list of ValueObjects.
+     *
+     * @param sql              The sql to retrieve the records
+     * @param valueObjectClass The class of the value object.
+     * @return a list of ValueObjects
+     */
     @Override
     public <T extends ValueObject> List<T> getValueObjects(String sql, Class<T> valueObjectClass) {
-        return null;
+        List<T> valueObjects = new ArrayList<T>();
+        Connection connection = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+            stmt.setFetchSize(getFetchSize());
+
+            rs = stmt.executeQuery(sql);
+            while (rs.next()) {
+                ValueObject valueObject = valueObjectClass.newInstance();
+                valueObject.parseSql(rs);
+                valueObject.setResultCode(ErrorCodeMap.RECORD_FOUND);
+                valueObjects.add((T) valueObject);
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to get value objects " + sql,e);
+        }
+        finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return valueObjects;
     }
 
     @Override
     public <T extends ValueObject> List<T> getValueObjects(String sql, Class<T> valueObjectClass, int fetchSize) {
-        return null;
+        List<T> valueObjects = new ArrayList<T>();
+        Connection connection = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+            stmt.setFetchSize(fetchSize);
+
+            rs = stmt.executeQuery(sql);
+            while (rs.next()) {
+                ValueObject valueObject = valueObjectClass.newInstance();
+                valueObject.parseSql(rs);
+                valueObject.setResultCode(ErrorCodeMap.RECORD_FOUND);
+                valueObjects.add((T) valueObject);
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to get value objects " + sql,e);
+        }
+        finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return valueObjects;
     }
 
-    @Override
+    /**
+     * Uses a <code>ValueObject</code> to make an update, insert, or delete in the datasource.
+     *
+     * @param valueObject value object to set
+     */
     public void setValueObject(ValueObject valueObject) {
 
+        if ((valueObject.getResultCode() != ErrorCodeMap.DELETED_NEW_RECORD && valueObject.isModified()) || valueObject.getResultCode() == ErrorCodeMap.NEW_RECORD ||
+                valueObject.getResultCode() == ErrorCodeMap.DELETED_RECORD) {
+            Connection connection = null;
+            try {
+                connection = getConnection();
+                setValueObject(connection, valueObject);
+            }
+            finally {
+                closeConnection(connection);
+            }
+        }
     }
 
-    @Override
+    /**
+     * Uses a <code>ValueObject</code> to make an update, insert, or delete in the datasource.
+     *
+     * @param connection  connection
+     * @param valueObject value object
+     */
     public void setValueObject(Connection connection, ValueObject valueObject) {
+        if ((valueObject.getResultCode() != ErrorCodeMap.DELETED_NEW_RECORD && valueObject.isModified()) || valueObject.getResultCode() == ErrorCodeMap.NEW_RECORD ||
+                valueObject.getResultCode() == ErrorCodeMap.DELETED_RECORD) {
 
+            executeSQL(connection, valueObject.getExecuteSql(), valueObject.getParams());
+        }
     }
 
-    @Override
+
+    /**
+     * Executes an sql INSERT, UPDATE, or DELETE command.
+     *
+     * @param connection connection
+     * @param sql        The sql to perform the action
+     * @param params     The parameters to set.
+     * @return the number of rows affected
+     */
+    public int executeSQL(Connection connection, String sql, List params) {
+        int rowsAffected = 0;
+        PreparedStatement ps = null;
+        try {
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            setSearchParams(ps, params);
+            rowsAffected = ps.executeUpdate();
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  executeSQL " + sql + "params " + params, e);
+        } finally {
+            closeStatement(ps);
+        }
+        return rowsAffected;
+    }
+
+    /**
+     * Uses  <code>ValueObject</code>s to make updates, inserts, or deletes in the datasource.
+     *
+     * @param valueObjects list of value objects
+     */
     public void setValueObjects(List valueObjects) {
-
+        Connection connection = null;
+        try {
+            connection = getConnection();
+            setValueObjects(connection, valueObjects);
+        }
+        finally {
+            closeConnection(connection);
+        }
     }
 
-    @Override
+    /**
+     * Uses  <code>ValueObject</code>s to make updates, inserts, or deletes in the datasource.
+     *
+     * @param connection   connection
+     * @param valueObjects list of value objects
+     */
+    public void setValueObjects(Connection connection, List valueObjects) {
+        ValueObject vo;
+        for (int i = 0; i < valueObjects.size(); i++) {
+            vo = (ValueObject) valueObjects.get(i);
+            setValueObject(connection, vo);
+        }
+    }
+
+    /**
+     * Gets a list of ValueObjects.
+     *
+     * @param sql              The sql to retrieve the records
+     * @param params           The parameters for the sql
+     * @param valueObjectClass The class of the value object.
+     * @return a list of ValueObjects
+     */
     public <T extends ValueObject> List<T> getValueObjects(String sql, List params, Class<T> valueObjectClass) {
-        return null;
+        List<T> valueObjects = new ArrayList<T>();
+        Connection connection = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        log.debug("message=getValueObjects,sql=" + sql + " ,params=" + params);
+
+        try {
+            connection = getConnection();
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            ps.setFetchSize(getFetchSize());
+            setSearchParams(ps, params);
+            rs = ps.executeQuery();
+            while (rs.next()) {
+                ValueObject valueObject = valueObjectClass.newInstance();
+                valueObject.parseSql(rs);
+                valueObject.setResultCode(ErrorCodeMap.RECORD_FOUND);
+                valueObjects.add((T) valueObject);
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to get value objects " + sql + " params" + params, e);
+        } finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+
+        return valueObjects;
     }
 
-    @Override
+    /**
+     * Gets a list of ValueObjects.
+     *
+     * @param sql              The sql to retrieve the records
+     * @param startAt          starting index
+     * @param recordsToReturn  number of records to return
+     * @param valueObjectClass The class of the value object.
+     * @return a list of ValueObjects
+     */
     public <T extends ValueObject> List<T> getValueObjectsStartingAtRecord(String sql, long startAt, int recordsToReturn, Class<T> valueObjectClass) {
-        return null;
+        List<T> valueObjects = new ArrayList<T>();
+        Connection connection = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+        long skipCounter = 1;
+        int returnCounter = 0;
+
+        // Treat rows as starting at 1 instead of 0
+        if(startAt <= 0) {
+            startAt = 1;
+        }
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+
+            rs = stmt.executeQuery(sql);
+            while (skipCounter < startAt && rs.next()) {
+                skipCounter++;
+            }
+
+            while (rs.next() && returnCounter < recordsToReturn) {
+                ValueObject valueObject = valueObjectClass.newInstance();
+                valueObject.parseSql(rs);
+                valueObject.setResultCode(ErrorCodeMap.RECORD_FOUND);
+                valueObjects.add((T) valueObject);
+                returnCounter++;
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to get value objects " + sql + " start " + startAt + " recordsToReturn " + recordsToReturn);
+        } finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return valueObjects;
     }
 
-    @Override
+    /**
+     * Gets a list of ValueObjects.
+     *
+     * @param sql              The sql to retrieve the records
+     * @param startAt          starting index
+     * @param recordsToReturn  number of records to return
+     * @param valueObjectClass The class of the value object.
+     * @return a list of ValueObjects
+     */
     public <T extends ValueObject> List<T> getValueObjectsStartingAtRecord(String sql, List params, long startAt, int recordsToReturn, Class<T> valueObjectClass) {
-        return null;
+        List<T> valueObjects = new ArrayList<T>();
+        Connection connection = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        long skipCounter = 1;
+        int returnCounter = 0;
+
+        // Treat rows as starting at 1 instead of 0
+        if(startAt <= 0) {
+            startAt = 1;
+        }
+
+        try {
+            connection = getConnection();
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            setSearchParams(ps, params);
+
+            rs = ps.executeQuery();
+            while (skipCounter < startAt && rs.next()) {
+                skipCounter++;
+            }
+
+            while (rs.next() && returnCounter < recordsToReturn) {
+                ValueObject valueObject = valueObjectClass.newInstance();
+                valueObject.parseSql(rs);
+                valueObject.setResultCode(ErrorCodeMap.RECORD_FOUND);
+                valueObjects.add((T) valueObject);
+                returnCounter++;
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to  getValueObjectsStartingAtRecord " + sql + " start " + startAt + " recordsToReturn " + recordsToReturn);
+        } finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+
+        return valueObjects;
     }
 
-    @Override
+    /**
+     * Executes a simple sql and returns a single row of data.  If the query returns
+     * multiple rows, only the first row is returned. If a column in the row returned is null,
+     * that column will be included in the list. Each value is represented as a
+     * XifinJdbcDaoManager.Value object
+     *
+     * @param sql The sql to retrieve the data.
+     * @return A list of XifinJdbcDaoManager.Value objects representing the value of each column
+     *         returned. NULL objects will possibly be returned in the list.
+     */
     public List<Value> getSingleRow(String sql) {
-        return null;
+        List<Value> values = new ArrayList<Value>();
+        Connection connection = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+
+            rs = stmt.executeQuery(sql);
+            if (rs.next()) {
+                ResultSetMetaData meta = rs.getMetaData();
+                int count = meta.getColumnCount();
+                for (int i = 1; i <= count; i++) {
+                    Object obj = rs.getObject(i);
+                    values.add(new Value(obj));
+                }
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to  getSingleRow " + sql, e);
+        }
+        finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return values;
     }
 
-    @Override
+    /**
+     * Executes a simple sql and returns a single row of data.  If the query returns
+     * multiple rows, only the first row is returned. If a column in the row returned is null,
+     * that column will be included in the list. Each value is represented as a
+     * XifinJdbcDaoManager.Value object
+     *
+     * @param sql    The sql to retrieve the data.
+     * @param params The parameters to set.
+     * @return A list of XifinJdbcDaoManager.Value objects representing the value of each column
+     *         returned. NULL objects will possibly be returned in the list.
+     */
     public List<Value> getSingleRow(String sql, List params) {
-        return null;
+        List<Value> values = new ArrayList<Value>();
+        Connection connection = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+
+        try {
+            connection = getConnection();
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            setSearchParams(ps, params);
+            rs = ps.executeQuery();
+            if (rs.next()) {
+                ResultSetMetaData meta = rs.getMetaData();
+                int count = meta.getColumnCount();
+                for (int i = 1; i <= count; i++) {
+                    Object obj = rs.getObject(i);
+                    values.add(new Value(obj));
+                }
+            }
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  getSingleRow " + sql + " params" + params, e);
+
+        }
+        finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+
+        return values;
     }
 
     @Override
@@ -146,34 +489,266 @@ public class XifinJdbcDaoManager implements MarsDaoManager{
         return null;
     }
 
-    @Override
+    /**
+     * Executes a sql and returns multiple rows of data. If a column in the row returned is null,
+     * that column will be included in the list. Each value is represented as a XifinJdbcDaoManager.Value object
+     *
+     * @param sql             sql string
+     * @param params          The parameters to set.
+     * @param startAt         start wih record
+     * @param recordsToReturn number of records to return
+     * @return A List of List of XifinJdbcDaoManager.Value objects representing the values returned.
+     *         The outer list represents the rows, and the inner list represents the columns in each row.  This method
+     *         gurantees not to return empty rows. NULL objects will possibly be in the inner list.
+     */
     public List<List<Value>> getMultipleRowsStartingAtRecord(String sql, List params, long startAt, int recordsToReturn) {
-        return null;
+        List<List<Value>> rows = new ArrayList<List<Value>>();
+        Connection connection = null;
+        PreparedStatement ps;
+        ResultSet rs;
+        Statement stmt = null;
+        long skipCounter = 0;
+        int returnCounter = 0;
+
+        try {
+            connection = getConnection();
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            ps.setFetchSize(getFetchSize());
+            setSearchParams(ps, params);
+
+            rs = ps.executeQuery();
+
+
+            while (skipCounter < startAt && rs.next()) {
+                skipCounter++;
+            }
+
+            while (rs.next() && returnCounter < recordsToReturn) {
+                ResultSetMetaData meta = rs.getMetaData();
+                int count = meta.getColumnCount();
+                if (count <= 0) {
+                    continue;
+                }
+
+                List<Value> columns = new ArrayList<Value>();
+                for (int i = 1; i <= count; i++) {
+                    Object obj = rs.getObject(i);
+                    columns.add(new Value(obj));
+                }
+                returnCounter++;
+                rows.add(columns);
+            }
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  getMultipleRows " + sql + " params" + params + " startAt" + startAt + " recordsToReturn" + recordsToReturn, e);
+        }
+        finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+        return rows;
     }
 
-    @Override
+    /**
+     * Executes a sql and returns multiple rows of data. If a column in the row returned is null,
+     * that column will be included in the list. Each value is represented as a XifinJdbcDaoManager.Value object
+     *
+     * @param sql             string
+     * @param startAt         starting index
+     * @param recordsToReturn number of records to return
+     * @return A List of List of XifinJdbcDaoManager.Value objects representing the values returned.
+     *         The outer list represents the rows, and the inner list represents the columns in each row.  This method
+     *         gurantees not to return empty rows. NULL objects will possibly be in the inner list.
+     */
     public List<List<Value>> getMultipleRowsStartingAtRecord(String sql, long startAt, int recordsToReturn) {
-        return null;
+        List<List<Value>> rows = new ArrayList<List<Value>>();
+        Connection connection = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+        long skipCounter = 0;
+        int returnCounter = 0;
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+
+            rs = stmt.executeQuery(sql);
+            while (skipCounter < startAt && rs.next()) {
+                skipCounter++;
+            }
+            while (rs.next() && returnCounter < recordsToReturn) {
+
+                ResultSetMetaData meta = rs.getMetaData();
+                int count = meta.getColumnCount();
+                if (count <= 0) continue;
+
+                List<Value> columns = new ArrayList<Value>();
+                for (int i = 1; i <= count; i++) {
+                    Object obj = rs.getObject(i);
+                    columns.add(new Value(obj));
+                }
+                returnCounter++;
+                rows.add(columns);
+            }
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  getMultipleRowsStartingAtRecord " + sql + " startAt" + startAt + " recordsToReturn " + recordsToReturn, e);
+        } finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return rows;
     }
 
-    @Override
+    /**
+     * Executes an sql INSERT, UPDATE, or DELETE command.
+     *
+     * @param sql    The sql to perform the action
+     * @param params The parameters to set.
+     * @return the number of rows affected
+     */
     public int executeSQL(String sql, List params) {
-        return 0;
+        int rowsAffected = 0;
+        Connection connection = null;
+        PreparedStatement ps = null;
+
+        log.debug("message=executeSQL,sql=" + sql + " ,params=" + params);
+
+        try {
+            connection = getConnection();
+            sql = processParams(sql, params);
+            ps = connection.prepareStatement(sql);
+            setSearchParams(ps, params);
+            rowsAffected = ps.executeUpdate();
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  executeSQL " + sql + "params " + params, e);
+        }
+        finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+
+        return rowsAffected;
     }
 
-    @Override
+    /**
+     * Executes an sql INSERT, UPDATE, or DELETE command.
+     *
+     * @param sql the sql to perform the action
+     * @return the number of rows affected
+     */
     public int executeSQL(String sql) {
-        return 0;
+        int rowsAffected = 0;
+        Connection connection = null;
+        Statement stmt = null;
+
+        log.debug("messaged=executeSQL,sql=" + sql);
+
+        try {
+            connection = getConnection();
+            stmt = connection.createStatement();
+
+            rowsAffected = stmt.executeUpdate(sql);
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  executeSQL " + sql, e);
+        }
+        finally {
+            closeStatement(stmt);
+            closeConnection(connection);
+        }
+
+        return rowsAffected;
     }
 
-    @Override
+    /**
+     * This method will perform batch select. In other words, it will re-use prepared statement
+     * to execute different set of parameters from the batch list.
+     *
+     * @param sql         statment that will be executed multiple times with different parameters.
+     * @param batchParams is a List of batch parameters; each batch will contain list of parameters.
+     *                    NOTE: The number of parameters must be the same in each batch list.
+     * @return List of rows from all batch parameters.
+     */
     public List<List<Value>> getMultipleRowsBatch(String sql, List<List<Object>> batchParams) {
-        return null;
+        List<List<Value>> rows = new ArrayList<List<Value>>();
+        Connection connection = null;
+        PreparedStatement ps = null;
+
+        try {
+            connection = getConnection();
+            //loop over each batch list and execute prepared statement
+            for (List<Object> batchParam : batchParams) {
+                String newSql = processParams(sql, batchParam);
+                ps = connection.prepareStatement(newSql);
+
+                setSearchParams(ps, batchParam);
+                ResultSet rs = ps.executeQuery();
+                while (rs.next()) {
+                    ResultSetMetaData meta = rs.getMetaData();
+                    int count = meta.getColumnCount();
+                    if (count <= 0) continue;
+
+                    List<Value> columns = new ArrayList<Value>();
+                    for (int i = 1; i <= count; i++) {
+                        Object obj = rs.getObject(i);
+                        columns.add(new Value(obj));
+                    }
+
+                    rows.add(columns);
+                }
+                //clear prepared statement parameters between execution
+                ps.clearParameters();
+            }
+        } catch (Exception e) {
+
+            throw new XifinDataAccessFailureException("failure to  executeSQL " + sql + "batchParams " + batchParams, e);
+        }
+        finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+
+        return rows;
     }
 
-    @Override
+    /**
+     * This method will perform batch update. In other words, it will batch up INSERT, UPDATE, or MERGE statements
+     * with different parameters, and then execute all updates at once.
+     *
+     * @param sql         is a String representings statement that will execute the batch update (i.e. INSERT, UPDATE, oe MERGE)
+     * @param batchParams is a List where each element is a List of parameters to be added to the batch.
+     * @return int[] array of update counts.
+     * @see java.sql.Statement#executeBatch() for mor information
+     */
     public int[] batchUpdate(String sql, List batchParams) {
-        return new int[0];
+        int[] rowsAffected;
+        Connection connection = null;
+        PreparedStatement ps = null;
+
+        try {
+            connection = getConnection();
+            //create prepared statement based on the first set of parameters.
+            sql = processParams(sql, (List) batchParams.get(0));
+            ps = connection.prepareStatement(sql);
+            //loop over each batch list and add its parameters to the prepared statement batch.
+            for (Iterator listIter = batchParams.iterator(); listIter.hasNext();) {
+                setSearchParams(ps, (List) listIter.next());
+                ps.addBatch();
+            }
+            //execute all batch updates at once.
+            rowsAffected = ps.executeBatch();
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("failure to  batchUpdate " + sql + "params " + batchParams, e);
+        }
+        finally {
+            closeStatement(ps);
+            closeConnection(connection);
+        }
+        return rowsAffected;
     }
 
 
@@ -249,33 +824,137 @@ public class XifinJdbcDaoManager implements MarsDaoManager{
     }
 
     @Override
-    public void executeProcedure(String procedureName, List<Object> params) {
+    public void executeProcedure(String storedProcedureName, List<Object> params) {
 
+        Connection conn = null;
+        String procSql = "{call  " + storedProcedureName + "(";
+
+        for (int i = 0; i < params.size(); i++) {
+            if (i == params.size() - 1) {
+                procSql = procSql + "?";
+            } else {
+                procSql = procSql + "? ,";
+            }
+        }
+        procSql = procSql + ")}";
+
+
+        try {
+            log.debug("message=Calling Stored Procedure= " + storedProcedureName + " ,Argument= " + params);
+            conn = getConnection();
+            CallableStatement cstmt = conn.prepareCall(procSql);
+            setSearchParams(cstmt, params);
+            cstmt.executeUpdate();
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("Failed to execute procedure " + storedProcedureName + " params" + params, e);
+        }
+        finally {
+            //close JDBC connection
+            closeConnection(conn);
+        }
     }
 
     @Override
-    public String executeFunction(String procedureName) {
-        return null;
+    public String executeFunction(String functionName) {
+
+        Connection conn = null;
+        String procSql = "{? = call  " + functionName + "()}";
+        String status;
+
+        try {
+            log.debug("message=Calling function = " + functionName);
+            conn = getConnection();
+            CallableStatement cstmt = conn.prepareCall(procSql);
+            cstmt.registerOutParameter(1, java.sql.Types.VARCHAR);
+            cstmt.execute();
+            status = cstmt.getString(1);
+
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("Failed to call function " + functionName, e);
+        } finally {
+            //close JDBC connection
+            closeConnection(conn);
+        }
+        return status;
     }
 
     @Override
     public Map<Integer, Object> executeProcedure(String procedureName, Map<Integer, Object> inputParams, Map<Integer, Integer> outputParams) {
-        return null;
+
+        Connection conn = null;
+        CallableStatement cstmt = null;
+        Map<Integer, Object> outputData = new HashMap<>();
+        String procSql = "{call  " + procedureName + "(";
+        int numOfParams = inputParams.size() + outputParams.size();
+        for (int i = 0; i < numOfParams; i++) {
+            if (i == numOfParams - 1) {
+                procSql = procSql + "?";
+            } else {
+                procSql = procSql + "? ,";
+            }
+        }
+        procSql = procSql + ")}";
+
+
+        try {
+            log.debug("Calling Stored Procedure: " + procedureName + " InputParams: " + inputParams + " OutParams: " + outputParams);
+            conn = getConnection();
+            cstmt = conn.prepareCall(procSql);
+            //Register output params
+            for (Map.Entry<Integer, Integer> entry : outputParams.entrySet()) {
+                cstmt.registerOutParameter(entry.getKey(), entry.getValue());
+            }
+            //Set input params
+            for (Map.Entry<Integer, Object> entry : inputParams.entrySet()) {
+                setParam(cstmt, entry.getValue(), entry.getKey());
+            }
+            //execute store procedure
+            cstmt.executeUpdate();
+            //Get data returned
+            for (Integer key : outputParams.keySet()) {
+                outputData.put(key, cstmt.getObject(key));
+            }
+        } catch (Exception e) {
+            throw new XifinDataAccessFailureException("Failed to execute procedure " + procedureName + " InputParams: " + inputParams + " OutParams: " + outputParams, e);
+        }
+        finally {
+            //close JDBC connection
+            closeConnection(conn);
+        }
+
+        return outputData;
     }
 
-    @Override
     public int getNextSequenceFromOracle(String seqName) {
-        return 0;
+        String GET_NEXT_SEQUENCE = "select " + seqName + ".nextVal from dual";
+        List<Value> results;
+
+        results = getSingleRow(GET_NEXT_SEQUENCE);
+
+        if (results.size() > 0) {
+            return results.get(0).toIntValue();
+        } else {
+            throw new XifinDataAccessFailureException("Failed to get next " + seqName);
+        }
     }
 
-    @Override
-    public <T extends ValueObject> ValueObjectIterator getValueObjectsIterator(Class<T> valueObjectClass, String sql, int fetchSize, Object... params) {
-        return null;
+    /**
+     *  Get bulk value Objects
+     * @param valueObjectClass valueObjectClass
+     * @param sql sql
+     * @param fetchSize fetchSize
+     * @param params params
+     * @param <T>
+     * @return ValueObjectIterator
+     */
+    public  <T extends  ValueObject> ValueObjectIterator getValueObjectsIterator(Class<T> valueObjectClass, String sql, int fetchSize,Object... params) {
+
+        return new ValueObjectIterator(dataSource,sql, params,valueObjectClass,fetchSize);
     }
 
-    @Override
-    public <T extends Map> MultipleMappedRowsIterator getMultipleMappedRowsIterator(String sql, int fetchSize, Object... params) {
-        return null;
+    public  <T extends  Map> MultipleMappedRowsIterator getMultipleMappedRowsIterator(String sql, int fetchSize, Object... params) {
+
+        return new MultipleMappedRowsIterator(dataSource,sql, params,fetchSize);
     }
 
     public void closeConnection(Connection connection) {
