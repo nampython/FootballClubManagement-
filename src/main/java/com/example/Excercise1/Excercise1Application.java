@@ -23,7 +23,10 @@ import springfox.documentation.swagger2.annotations.EnableSwagger2;
 //@EnableSwagger2
 // scanBasePackages = {"com.example.Excercise1.services"}
 public class Excercise1Application {
-
+    /**
+     *
+     * @param args
+     */
 	public static void main(String[] args) {
 		SpringApplication.run(Excercise1Application.class, args);
 	}
