@@ -15,6 +15,6 @@ public class JDBC {
     static final String QUERY = "SELECT stadium, about FROM TRAINING_CLUB";
 
 
-    public static void main(String[] args) {
-    }
+//    public static void main(String[] args) {
+//    }
 }
